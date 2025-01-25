@@ -161,7 +161,7 @@ def display_graph_stats(G):
         st.subheader("Edge Statistics")
         st.write(f"Total Edges: {stats['total_edges']}")
         for edge in G.edges(data=True):
-            edge_type = edge[2].get("type", "Unknown")
+            edge_type = edge[2].get("relationship", "Unknown")
             stats["edge_types"][edge_type] = stats["edge_types"].get(edge_type, 0) + 1
 
         if stats["edge_types"]:
