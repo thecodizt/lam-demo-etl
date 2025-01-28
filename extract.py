@@ -65,64 +65,124 @@ def read_xlsx(file_path):
 
 
 def read_zip(file_path):
-    # Get the directory name from zip file path (without .zip extension)
-    dir_path = os.path.splitext(file_path)[0]
+    """
+    Read data from a zip file containing CSV files
 
-    # Remove the directory if it already exists
-    if os.path.exists(dir_path):
-        import shutil
+    Args:
+        file_path: Path to the zip file
 
-        shutil.rmtree(dir_path)
+    Returns:
+        Dictionary containing the data from each CSV file
+    """
+    if not os.path.exists(file_path):
+        raise FileNotFoundError(f"ZIP file not found at path: {file_path}")
 
-    # Create a fresh directory
-    os.makedirs(dir_path)
-
-    # Extract the zip file contents
-    with zipfile.ZipFile(file_path, "r") as zip_ref:
-        zip_ref.extractall(dir_path)
-
-    # Process all CSV files in the extracted directory
     data = {}
-    for root, _, files in os.walk(dir_path):
-        for file in files:
-            if file.endswith(".csv"):
-                csv_path = os.path.join(root, file)
-                try:
-                    # Read CSV file
-                    df = pd.read_csv(csv_path)
-                    # Convert to records format (list of dictionaries)
-                    records = df.to_dict(orient="records")
 
-                    # Use snake_case filename (without extension) as the key
-                    key = convert_to_snake_case(os.path.splitext(file)[0])
-                    data[key] = records
-                except Exception as e:
-                    print(f"Error processing {file}: {str(e)}")
+    with zipfile.ZipFile(file_path, "r") as zip_ref:
+        # List all CSV files in the zip
+        csv_files = [f for f in zip_ref.namelist() if f.endswith(".csv")]
+
+        for csv_file in csv_files:
+            # Get the type name from the file name (remove .csv extension and path)
+            type_name = os.path.splitext(os.path.basename(csv_file))[0]
+
+            if type_name.lower() in FILES_BLACKLIST:
+                continue
+
+            # Read CSV file directly from zip, try different encodings
+            encodings = ['utf-8', 'latin1', 'cp1252']
+            df = None
+            
+            for encoding in encodings:
+                try:
+                    with zip_ref.open(csv_file) as f:
+                        df = pd.read_csv(f, encoding=encoding)
+                    break
+                except UnicodeDecodeError:
                     continue
+            
+            if df is None:
+                raise UnicodeDecodeError(f"Failed to decode {csv_file} with any of the attempted encodings: {encodings}")
+                
+            data[type_name] = df.to_dict(orient="records")
 
     return data
 
 
-# Custom function to convert datetime to epoch time
-def datetime_to_epoch(obj):
-    if isinstance(obj, (pd.Timestamp, datetime)):
-        return int(obj.timestamp())  # Convert to epoch time (seconds since 1970)
-    raise TypeError(f"Type {type(obj)} not serializable")
+def save_timestamped_data(data, timestamp=None):
+    """
+    Save data to a timestamped zip file
+
+    Args:
+        data: Dictionary containing the data to save
+        timestamp: Optional timestamp to use, defaults to current time
+    """
+    if timestamp is None:
+        timestamp = int(datetime.now().timestamp())
+
+    # Create timestamped directory if it doesn't exist
+    if not os.path.exists("data/timestamped"):
+        os.makedirs("data/timestamped")
+
+    # Create temporary directory for CSV files
+    temp_dir = f"data/temp_{timestamp}"
+    if not os.path.exists(temp_dir):
+        os.makedirs(temp_dir)
+
+    try:
+        # Save each data type to a CSV file
+        for type_name, records in data.items():
+            if type_name.lower() in FILES_BLACKLIST:
+                continue
+
+            df = pd.DataFrame(records)
+            df.to_csv(f"{temp_dir}/{type_name}.csv", index=False)
+
+        # Create zip file
+        zip_path = f"data/timestamped/{timestamp}.zip"
+        with zipfile.ZipFile(zip_path, "w") as zipf:
+            for root, _, files in os.walk(temp_dir):
+                for file in files:
+                    file_path = os.path.join(root, file)
+                    arcname = os.path.relpath(file_path, temp_dir)
+                    zipf.write(file_path, arcname)
+
+    finally:
+        # Clean up temporary directory
+        import shutil
+
+        if os.path.exists(temp_dir):
+            shutil.rmtree(temp_dir)
 
 
-def convert_to_snake_case(string):
-    string = string.lower()
-    string = string.replace(" ", "_")
-    string = string.replace(".", "_")
-    return string
+def get_available_timestamps():
+    """
+    Get list of available timestamps from the timestamped directory
+
+    Returns:
+        List of timestamps (as integers)
+    """
+    if not os.path.exists("data/timestamped"):
+        return []
+
+    timestamps = []
+    for file in os.listdir("data/timestamped"):
+        if file.endswith(".zip"):
+            try:
+                timestamp = int(file.split(".")[0])
+                timestamps.append(timestamp)
+            except ValueError:
+                continue
+
+    return sorted(timestamps)
 
 
 def main():
     file_path = "data/sample/sample.xlsx"
-    data = convert_xlsx(file_path)
+    data = read_xlsx(file_path)
     save_xlsx_to_csv(source_path=file_path, target_path="data/sample/csv/")
-
-    # data = convert_csv(file_path)
+    save_timestamped_data(data)
 
 
 if __name__ == "__main__":

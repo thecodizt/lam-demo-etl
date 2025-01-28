@@ -1,0 +1,33 @@
+{
+    "nodes": [
+        {
+            "type": "part",
+            "id": "Part"
+        },
+        {
+            "type": "supplier",
+            "id": "Supplier"
+        },
+        {
+            "type": "warehouse",
+            "id": "Warehouse"
+        }
+    ],
+    "edges": [
+        {
+            "type": "part_to_part",
+            "source_node_type": "part",
+            "target_node_type": "part"
+        },
+        {
+            "type": "part_to_supplier",
+            "source_node_type": "part",
+            "target_node_type": "supplier"
+        },
+        {
+            "type": "part_to_warehouse",
+            "source_node_type": "part",
+            "target_node_type": "warehouse"
+        }
+    ]
+}

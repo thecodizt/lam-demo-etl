@@ -1,329 +1,357 @@
 import streamlit as st
-import os
-import json
-import random
 import pandas as pd
-import numpy as np
-
+import os
 import extract
 import transform
 import load
+import json
+from datetime import datetime
+import networkx as nx
+from pyvis.network import Network
+import streamlit.components.v1 as components
+import random
+import requests
+import numpy as np
+import logging
 
-st.set_page_config(
-    page_title="LAM - ETL",
-    page_icon=":chart:",
-    layout="wide",
-    initial_sidebar_state="expanded",
-)
-
-st.title("LAM - ETL")
-
-
-# Upload XLSX or ZIP File
-def input():
-    st.header("Upload Data")
-    file = st.file_uploader(
-        "Upload XLSX, ZIP, or JSON File", type=["xlsx", "zip", "json"]
-    )
-
-    data = None
-    file_path = None
-
-    # save file to cache dir
-    if file:
-        if not os.path.exists("cache"):
-            os.makedirs("cache")
-        with open(os.path.join("cache", file.name), "wb") as f:
-            f.write(file.getbuffer())
-        file_path = os.path.join("cache", file.name)
-        st.success(f"File {file.name} uploaded successfully to {file_path}.")
-
-    return file_path
-
-
-class NaNEncoder(json.JSONEncoder):
-    """Custom JSON encoder to handle NaN, Infinity, and -Infinity values"""
-
-    def _is_nan(self, obj):
-        """Helper method to check for all possible NaN representations"""
-        import numpy as np
-        import pandas as pd
-
-        if obj is None:
-            return True
-        if isinstance(obj, (float, np.floating)):
-            return np.isnan(obj)
-        if pd.isna(obj):
-            return True
-        if isinstance(obj, str) and obj.lower() == "nan":
-            return True
-        return False
-
-    def default(self, obj):
-        """Handle non-basic Python types"""
-        import numpy as np
-
-        if self._is_nan(obj):
-            return None
-
-        if isinstance(obj, (np.floating, float)):
-            if np.isinf(obj):
-                return "Infinity" if obj > 0 else "-Infinity"
-            return float(obj)
-
-        if isinstance(obj, (np.integer, np.bool_)):
-            return int(obj)
-
-        if isinstance(obj, np.ndarray):
-            return obj.tolist()
-
-        return super().default(obj)
-
-    def encode(self, obj):
-        """Override encode to handle NaN values in basic types"""
-        if isinstance(obj, (dict, list)):
-            return super().encode(self._handle_nan_in_container(obj))
-        if self._is_nan(obj):
-            return "null"
-        return super().encode(obj)
-
-    def _handle_nan_in_container(self, obj):
-        """Recursively handle NaN values in containers"""
-        if isinstance(obj, dict):
-            return {k: self._handle_nan_in_container(v) for k, v in obj.items()}
-        if isinstance(obj, list):
-            return [self._handle_nan_in_container(item) for item in obj]
-        if self._is_nan(obj):
-            return None
-        return obj
-
-
-def save_json(data: dict, filename: str):
-    """Save data to JSON file with proper formatting and NaN handling"""
-    with open(filename, "w", encoding="utf-8") as f:
-        json.dump(data, f, cls=NaNEncoder, indent=4, ensure_ascii=False)
-
-
-def load_json(file_path: str) -> dict:
-    """Load data from JSON file with proper NaN handling"""
-    with open(file_path, "r", encoding="utf-8") as f:
-        return json.load(f)
-
-
-def extract_data(file_path):
-    data = None
-    if file_path:
-        if file_path.endswith(".xlsx"):
-            data = extract.read_xlsx(file_path)
-        elif file_path.endswith(".zip"):
-            data = extract.read_zip(file_path)
-        elif file_path.endswith(".json"):
-            data = load_json(file_path)
-    return data
+# Initialize logger
+logger = logging.getLogger(__name__)
 
 
 def display_graph_stats(G):
     """Display graph statistics"""
-    stats = {
-        "total_nodes": G.number_of_nodes(),
-        "total_edges": G.number_of_edges(),
-        "node_types": {},
-        "edge_types": {},
-    }
+    col1, col2 = st.columns(2)
 
-    # Count node types
-    for node, attrs in G.nodes(data=True):
-        node_type = attrs.get("type", "Unknown")
-        stats["node_types"][node_type] = stats["node_types"].get(node_type, 0) + 1
+    with col1:
+        st.subheader("Node Statistics")
+        total_nodes = G.number_of_nodes()
+        st.write(f"Total Nodes: {total_nodes}")
 
-    # Display node statistics
-    st.subheader("Node Statistics")
-    st.write(f"Total Nodes: {stats['total_nodes']}")
-    if stats["node_types"]:
-        nodes_df = pd.DataFrame(
-            [
+        # Count nodes by type
+        node_types = {}
+        for _, attr in G.nodes(data=True):
+            node_type = attr.get("type", "Unknown")
+            node_types[node_type] = node_types.get(node_type, 0) + 1
+
+        # Create DataFrame for node type statistics
+        node_stats = []
+        for node_type, count in node_types.items():
+            node_stats.append(
                 {
-                    "Node Type": type_name.replace("_", " ").title(),
+                    "Node Type": node_type,
                     "Count": count,
-                    "Percentage": f"{(count/stats['total_nodes'])*100:.1f}%",
+                    "Percentage": f"{(count/total_nodes)*100:.1f}%",
                 }
-                for type_name, count in stats["node_types"].items()
-            ]
-        )
-        st.dataframe(
-            nodes_df,
-            hide_index=True,
-            use_container_width=True,
-        )
+            )
 
-    # Count and display edge types if present
-    if G.number_of_edges() > 0:
+        st.dataframe(pd.DataFrame(node_stats))
+
+    with col2:
         st.subheader("Edge Statistics")
-        st.write(f"Total Edges: {stats['total_edges']}")
-        for edge in G.edges(data=True):
-            edge_type = edge[2].get("relationship", "Unknown")
-            stats["edge_types"][edge_type] = stats["edge_types"].get(edge_type, 0) + 1
+        total_edges = G.number_of_edges()
+        st.write(f"Total Edges: {total_edges}")
 
-        if stats["edge_types"]:
-            edges_df = pd.DataFrame(
-                [
+        if total_edges > 0:
+            # Count edges by type
+            edge_types = {}
+            for _, _, data in G.edges(data=True):
+                edge_type = data.get("type", "Unknown")
+                edge_types[edge_type] = edge_types.get(edge_type, 0) + 1
+
+            # Create DataFrame for edge type statistics
+            edge_stats = []
+            for edge_type, count in edge_types.items():
+                edge_stats.append(
                     {
-                        "Edge Type": rel_name.replace("_", " ").title(),
+                        "Edge Type": edge_type,
                         "Count": count,
-                        "Percentage": f"{(count/stats['total_edges'])*100:.1f}%",
+                        "Percentage": f"{(count/total_edges)*100:.1f}%",
                     }
-                    for rel_name, count in stats["edge_types"].items()
-                ]
-            )
-            st.dataframe(
-                edges_df,
-                hide_index=True,
-                use_container_width=True,
-            )
+                )
+
+            st.dataframe(pd.DataFrame(edge_stats))
 
 
-def display_graph(G):
-    """Display interactive graph visualization"""
-    # Visualization settings
-    num_items = st.slider(
-        "Number of random items to show",
-        min_value=2,
-        max_value=min(15, G.number_of_nodes()),
-        value=min(5, G.number_of_nodes()),
-        help="Select how many random items to visualize",
-    )
+def display_graph(G: nx.Graph, timestamp: str = "", max_nodes: int = 50):
+    """Display graph using pyvis"""
+    # Create a new graph for visualization
+    vis_graph = nx.Graph()
 
-    # Select random nodes and visualize
-    selected_nodes = random.sample(list(G.nodes()), num_items)
-    fig = transform.visualize_graph(G, selected_nodes)
-    st.plotly_chart(fig, use_container_width=True)
+    # Randomly sample nodes if there are too many
+    nodes_to_show = list(G.nodes())
+    if len(nodes_to_show) > max_nodes:
+        nodes_to_show = random.sample(nodes_to_show, max_nodes)
 
-    # Graph explanation
-    with st.expander("Graph Legend"):
-        st.markdown(
-            """
-        - **Nodes**: Represent entities in the graph
-        - **Edges**: Show relationships between nodes
-        - **Colors**: Different colors represent different types of nodes
-        - **Lines**: Show connections between related nodes
-        """
-        )
+    # Add selected nodes and their edges
+    for node in nodes_to_show:
+        # Add node with its attributes
+        vis_graph.add_node(node, **G.nodes[node])
+
+        # Add edges between selected nodes
+        for neighbor in G.neighbors(node):
+            if neighbor in nodes_to_show:
+                vis_graph.add_edge(node, neighbor, **G.edges[node, neighbor])
+
+    # Create and configure the pyvis network
+    net = Network(notebook=True, height="500px", width="100%")
+
+    # Add nodes with different colors based on type
+    node_colors = {}
+    for node, attrs in vis_graph.nodes(data=True):
+        node_type = attrs.get("type", "default")
+        if node_type not in node_colors:
+            node_colors[node_type] = "#%06x" % random.randint(0, 0xFFFFFF)
+        net.add_node(node, color=node_colors[node_type], title=str(attrs))
+
+    # Add edges
+    for source, target, attrs in vis_graph.edges(data=True):
+        net.add_edge(source, target, title=str(attrs))
+
+    # Generate HTML file
+    html_file = f"cache/graph_{timestamp.replace(' ', '_')}.html"
+    net.save_graph(html_file)
+
+    # Read the generated HTML
+    with open(html_file, "r") as f:
+        source_code = f.read()
+    components.html(source_code, height=500)
+
+
+def clean_graph_data(G):
+    """Clean graph data to ensure JSON compatibility"""
+    # Clean node attributes
+    for node in G.nodes():
+        attrs = G.nodes[node]
+        for key, value in list(attrs.items()):
+            if pd.isna(value) or (
+                isinstance(value, float) and (np.isnan(value) or np.isinf(value))
+            ):
+                attrs[key] = None
+
+    # Clean edge attributes
+    for u, v in G.edges():
+        attrs = G.edges[u, v]
+        for key, value in list(attrs.items()):
+            if pd.isna(value) or (
+                isinstance(value, float) and (np.isnan(value) or np.isinf(value))
+            ):
+                attrs[key] = None
+
+    return G
 
 
 def main():
-    # Initialize graph server
-    graph_server = load.GraphServer()
+    st.title("Graph ETL Pipeline")
 
-    file_path = input()
+    # Create cache directory if it doesn't exist
+    if not os.path.exists("cache"):
+        os.makedirs("cache")
+    if not os.path.exists("cache/uploads"):
+        os.makedirs("cache/uploads")
 
-    data = None
-    if file_path:
-        data = extract_data(file_path)
+    # Section 1: Upload Data
+    st.header("1. Upload Data")
+    schema_file = st.file_uploader("Upload Schema (JSON)", type=["json"])
+    data_files = st.file_uploader(
+        "Upload Data (ZIP)", type=["zip"], accept_multiple_files=True
+    )
 
-    if data:
-        st.header("Extracted Data")
-        st.success("Data extracted successfully!")
+    if not schema_file or not data_files:
+        st.warning("Please upload both schema and data files to proceed")
+        return
 
-        # Data view and download
-        cols = st.columns([8, 1])
-        with cols[0]:
-            with st.expander("View Raw Data"):
-                st.json(data)
-        with cols[1]:
-            # Save with proper NaN handling and indentation
-            json_str = json.dumps(data, cls=NaNEncoder, indent=4, ensure_ascii=False)
-            st.download_button(
-                "Download JSON",
-                data=json_str,
-                file_name="data.json",
-                mime="application/json",
+    # Save schema
+    schema = json.load(schema_file)
+
+    # Save data files
+    data_to_process = []
+    for data_file in data_files:
+        try:
+            timestamp = int(os.path.splitext(data_file.name)[0])
+            timestamp_dir = os.path.join("cache/uploads", str(timestamp))
+            if not os.path.exists(timestamp_dir):
+                os.makedirs(timestamp_dir)
+            filepath = os.path.join(timestamp_dir, data_file.name)
+            with open(filepath, "wb") as f:
+                f.write(data_file.getvalue())
+            data_to_process.append(filepath)
+        except ValueError:
+            st.error(
+                f"Invalid filename format for {data_file.name}. Expected timestamp."
             )
+            return
 
-        st.header("Transformed Data")
-        # Create the graph and display statistics
-        G = transform.create_graph(data)
-        st.success("Graph created successfully!")
-        display_graph_stats(G)
+    # Section 2: Extract
+    st.header("2. Extract")
+    extracted_data = {}
 
-        # Graph visualization section
-        st.subheader("Graph Visualization")
-        display_graph(G)
+    for data_file in data_to_process:
+        timestamp = os.path.splitext(os.path.basename(data_file))[0]
+        display_time = datetime.fromtimestamp(int(timestamp)).strftime(
+            "%Y-%m-%d %H:%M:%S"
+        )
 
-        # Server upload section
-        st.header("Upload to Server")
-
-        # Server health check
-        server_status = graph_server.health_check()
-        if server_status:
-            st.success("✅ Server is healthy and ready to accept data")
-        else:
-            st.error("❌ Server is not available")
-            st.info("Please check if the server is running and try again later.")
-            st.stop()  # Stop execution if server is not healthy
-
-        # Show available versions
-        with st.expander("View Available Versions"):
-            versions = graph_server.get_versions()
-            if versions:
-                st.write("Existing versions on server:")
-                version_table = []
-                for v in versions:
-                    version_table.append({"Version": v})
-                st.table(version_table)
-            else:
-                st.info("No versions found on server")
-
-            st.markdown(
-                """
-            **Version Naming Guidelines:**
-            - Use semantic versioning (e.g., v1, v2, v1.0.1)
-            - Avoid special characters except hyphen (-)
-            - Make it descriptive (e.g., v1-test, v1-prod)
-            
-            **Reserved Versions:**
-            - `default`: System default version
-            """
-            )
-
-        # Version input and upload button
-        col1, col2 = st.columns([3, 1])
-        with col1:
-            default_version = (
-                f"v1-test-{len(versions) + 1}"  # Suggest next version number
-            )
-            version = st.text_input("Version name", default_version)
-            if version.lower() == "default":
-                st.error("❌ Cannot use 'default' as version name - it is reserved")
-                st.stop()
-            if version in versions:
-                st.warning(
-                    f"⚠️ Version '{version}' already exists. Using this version will update existing data."
-                )
-        with col2:
-            upload_button = st.button(
-                "Upload to Server", disabled=version.lower() == "default"
-            )
-
-        if upload_button:
+        with st.expander(f"Data at {display_time}"):
             try:
-                progress = st.progress(0)
+                data = extract.read_zip(data_file)
+                extracted_data[timestamp] = data
+                st.json(json.loads(json.dumps(data, cls=load.NaNEncoder)))
+            except Exception as e:
+                st.error(f"Error extracting data from {data_file}: {str(e)}")
+                continue
 
-                def update_progress(value):
-                    progress.progress(value)
+    # Section 3: Transform
+    st.header("3. Transform")
 
-                success, message = graph_server.send_graph(
-                    graph=G,
-                    version=version,
-                    timestamp=0,
-                    progress_callback=update_progress,
+    # Sort timestamps to ensure ordered processing
+    all_timestamps = sorted(extracted_data.keys())
+    debug_info = st.empty()
+    debug_info.info(
+        f"Found {len(all_timestamps)} timestamps to process: {all_timestamps}"
+    )
+
+    # Process all graphs first
+    graphs = {}
+    for timestamp in all_timestamps:
+        try:
+            # Build graph
+            G = transform.build_graph(extracted_data[timestamp], schema)
+            graphs[timestamp] = G
+            logger.info(
+                f"Built graph for timestamp {timestamp}: Nodes={len(G.nodes)}, Edges={len(G.edges)}"
+            )
+        except Exception as e:
+            st.error(f"Error building graph for timestamp {timestamp}: {str(e)}")
+            continue
+
+    # Visualization controls for display only
+    st.subheader("Visualization Controls")
+    col1, col2 = st.columns(2)
+    with col1:
+        selected_timestamp = st.selectbox(
+            "Select timestamp to visualize",
+            options=all_timestamps,
+            format_func=lambda x: datetime.fromtimestamp(int(x)).strftime(
+                "%Y-%m-%d %H:%M:%S"
+            ),
+        )
+    with col2:
+        max_nodes = st.slider(
+            "Maximum nodes to display", min_value=5, max_value=100, value=50
+        )
+
+    # Display only the selected timestamp
+    if selected_timestamp:
+        display_time = datetime.fromtimestamp(int(selected_timestamp)).strftime(
+            "%Y-%m-%d %H:%M:%S"
+        )
+        st.subheader(f"Graph at {display_time}")
+
+        G = graphs[selected_timestamp]
+        # Display statistics and graph
+        display_graph_stats(G)
+        display_graph(G, timestamp=display_time, max_nodes=max_nodes)
+
+    # Section 4: Load
+    st.header("4. Load")
+
+    col1, col2 = st.columns(2)
+    with col1:
+        version = st.text_input("Version", value="v1")
+    with col2:
+        batch_size = st.number_input(
+            "Batch Size", min_value=100, max_value=10000, value=1000, step=100
+        )
+
+    if st.button("Upload to Server"):
+        if not graphs:
+            st.error("No graphs to upload. Please process some data first.")
+            return
+
+        # Initialize progress container
+        progress_container = st.empty()
+        overall_progress = st.progress(0.0)
+        status_text = st.empty()
+
+        # Check server health first
+        server = load.GraphServer()
+        if not server.health_check():
+            st.error("Server is not healthy. Please check server status and try again.")
+            return
+
+        try:
+            # Sort timestamps to ensure ordered processing
+            timestamps = sorted(graphs.keys())
+            total_graphs = len(timestamps)
+            logger.info(
+                f"Found {total_graphs} graphs to process with timestamps: {timestamps}"
+            )
+
+            debug_container = st.empty()
+            debug_container.info(
+                f"Processing {total_graphs} graphs with timestamps: {timestamps}"
+            )
+
+            for idx, timestamp in enumerate(timestamps):
+                G = graphs[timestamp]
+                display_time = datetime.fromtimestamp(int(timestamp)).strftime(
+                    "%Y-%m-%d %H:%M:%S"
                 )
 
-                if success:
+                logger.info(f"Processing graph {idx + 1}/{total_graphs}")
+                logger.info(f"Timestamp: {timestamp} ({display_time})")
+                logger.info(f"Graph info: Nodes={len(G.nodes)}, Edges={len(G.edges)}")
+
+                status_text.write(
+                    f"Processing graph {idx + 1}/{total_graphs} ({display_time})..."
+                )
+
+                # Convert graph to JSON
+                graph_data = nx.node_link_data(G)
+
+                # Prepare data for upload
+                upload_data = {
+                    "timestamp": int(timestamp),  # Ensure timestamp is an integer
+                    "graph": graph_data,
+                }
+
+                # Upload to server - first timestamp uses bulk_create, others use bulk_update
+                is_first_timestamp = idx == 0
+                logger.info(f"Uploading with is_first_timestamp={is_first_timestamp}")
+
+                response = load.upload_to_server(
+                    upload_data,
+                    version=version,
+                    batch_size=batch_size,
+                    is_first_timestamp=is_first_timestamp,
+                )
+
+                if response.get("success"):
+                    action = "Created" if is_first_timestamp else "Updated"
+                    message = (
+                        f"{action} graph for {display_time}: {response.get('message')}"
+                    )
                     st.success(message)
+                    logger.info(message)
                 else:
-                    st.error(message)
-            except Exception as e:
-                st.error(f"Error sending graph to server: {str(e)}")
+                    error = f"Failed to upload graph for {display_time}: {response.get('error')}"
+                    st.error(error)
+                    logger.error(error)
+
+                # Update overall progress
+                overall_progress.progress((idx + 1) / total_graphs)
+
+        except Exception as e:
+            error = f"Error uploading to server: {str(e)}"
+            st.error(error)
+            logger.error(error, exc_info=True)
+        finally:
+            # Clean up progress displays
+            progress_container.empty()
+            overall_progress.empty()
+            status_text.empty()
+            debug_container.empty()
 
 
-main()
+if __name__ == "__main__":
+    main()
