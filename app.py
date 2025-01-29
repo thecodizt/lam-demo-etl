@@ -165,7 +165,7 @@ def main():
 
     # Save data files
     data_to_process = []
-    for data_file in data_files:
+    for data_file in sorted(data_files, key=lambda x: x.name):
         try:
             timestamp = int(os.path.splitext(data_file.name)[0])
             timestamp_dir = os.path.join("cache/uploads", str(timestamp))
