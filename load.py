@@ -8,6 +8,7 @@ import copy
 import numpy as np
 import pandas as pd
 import streamlit as st
+import os
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -33,7 +34,8 @@ class NaNEncoder(json.JSONEncoder):
 
 class GraphServer:
     def __init__(self, base_url: str = "http://localhost:8000/api"):
-        self.base_url = base_url.rstrip("/")
+        default_host = os.getenv("API_HOST", "localhost")
+        self.base_url = f"http://{default_host}:8000/api"
 
     def _make_request(
         self, method: str, endpoint: str, data: Dict[str, Any] = None
