@@ -7,8 +7,7 @@ import load
 import json
 from datetime import datetime
 import networkx as nx
-from pyvis.network import Network
-import streamlit.components.v1 as components
+import plotly.graph_objects as go
 import random
 import requests
 import numpy as np
@@ -73,7 +72,7 @@ def display_graph_stats(G):
 
 
 def display_graph(G: nx.Graph, timestamp: str = "", max_nodes: int = 50):
-    """Display graph using pyvis"""
+    """Display graph using Plotly"""
     # Create a new graph for visualization
     vis_graph = nx.Graph()
 
@@ -92,29 +91,80 @@ def display_graph(G: nx.Graph, timestamp: str = "", max_nodes: int = 50):
             if neighbor in nodes_to_show:
                 vis_graph.add_edge(node, neighbor, **G.edges[node, neighbor])
 
-    # Create and configure the pyvis network
-    net = Network(notebook=True, height="500px", width="100%")
+    # Get node positions using spring layout
+    pos = nx.spring_layout(vis_graph)
 
-    # Add nodes with different colors based on type
-    node_colors = {}
-    for node, attrs in vis_graph.nodes(data=True):
+    # Prepare node trace
+    node_x = []
+    node_y = []
+    node_text = []
+    node_colors = []
+    color_map = {}
+
+    for node in vis_graph.nodes():
+        x, y = pos[node]
+        node_x.append(x)
+        node_y.append(y)
+        attrs = vis_graph.nodes[node]
+        node_text.append(f"Node: {node}<br>" + "<br>".join([f"{k}: {v}" for k, v in attrs.items()]))
+        
+        # Assign colors based on node type
         node_type = attrs.get("type", "default")
-        if node_type not in node_colors:
-            node_colors[node_type] = "#%06x" % random.randint(0, 0xFFFFFF)
-        net.add_node(node, color=node_colors[node_type], title=str(attrs))
+        if node_type not in color_map:
+            color_map[node_type] = f"#{random.randint(0, 0xFFFFFF):06x}"
+        node_colors.append(color_map[node_type])
 
-    # Add edges
-    for source, target, attrs in vis_graph.edges(data=True):
-        net.add_edge(source, target, title=str(attrs))
+    node_trace = go.Scatter(
+        x=node_x,
+        y=node_y,
+        mode='markers',
+        hoverinfo='text',
+        text=node_text,
+        marker=dict(
+            color=node_colors,
+            size=15,
+            line=dict(width=2)
+        )
+    )
 
-    # Generate HTML file
-    html_file = f"cache/graph_{timestamp.replace(' ', '_')}.html"
-    net.save_graph(html_file)
+    # Prepare edge trace
+    edge_x = []
+    edge_y = []
+    edge_text = []
 
-    # Read the generated HTML
-    with open(html_file, "r") as f:
-        source_code = f.read()
-    components.html(source_code, height=500)
+    for edge in vis_graph.edges():
+        x0, y0 = pos[edge[0]]
+        x1, y1 = pos[edge[1]]
+        edge_x.extend([x0, x1, None])
+        edge_y.extend([y0, y1, None])
+        
+        # Add edge attributes to hover text
+        attrs = vis_graph.edges[edge]
+        edge_text.extend(["<br>".join([f"{k}: {v}" for k, v in attrs.items()]), "", ""])
+
+    edge_trace = go.Scatter(
+        x=edge_x,
+        y=edge_y,
+        mode='lines',
+        line=dict(width=1, color='#888'),
+        hoverinfo='text',
+        text=edge_text
+    )
+
+    # Create figure
+    fig = go.Figure(
+        data=[edge_trace, node_trace],
+        layout=go.Layout(
+            showlegend=False,
+            hovermode='closest',
+            margin=dict(b=0, l=0, r=0, t=0),
+            xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
+            yaxis=dict(showgrid=False, zeroline=False, showticklabels=False)
+        )
+    )
+
+    # Display the plot in Streamlit
+    st.plotly_chart(fig, use_container_width=True)
 
 
 def clean_graph_data(G):
