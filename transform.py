@@ -25,10 +25,10 @@ def build_graph(data: Dict[str, List[Dict]], schema: Dict[str, List[Dict]]) -> n
         node_type = node_schema["type"]
         pk_field = node_schema["id"]
 
-        if node_type in data:
+        if node_type in normalized_data:
             node_pk_map[node_type] = {}
 
-            for node_data in data[node_type]:
+            for node_data in normalized_data[node_type]:
                 pk_value = str(node_data.get(pk_field))
                 if pk_value:
                     # Create a unique node ID
@@ -44,18 +44,12 @@ def build_graph(data: Dict[str, List[Dict]], schema: Dict[str, List[Dict]]) -> n
                     # Store mapping of primary key to node ID
                     node_pk_map[node_type][pk_value] = node_id
 
-    # Process edge files (files with 'to' in their name)
-    edge_files = [k for k in data.keys() if " to " in k]
-
-    for edge_file in edge_files:
+    for edge in schema["edges"]:
         # Get source and target types from the edge file name
-        source_type, target_type = edge_file.split(" to ")
-
-        # Convert edge file name to match schema edge type format
-        edge_type = edge_file.replace(" to ", "_to_")
+        source_type, target_type = edge["source_node_type"], edge["target_node_type"]
 
         # Process each edge record
-        for edge_data in data[edge_file]:
+        for edge_data in normalized_data[edge["type"]]:
             # Get the first two columns as source and target
             columns = list(edge_data.keys())
             if len(columns) < 2:
@@ -81,7 +75,7 @@ def build_graph(data: Dict[str, List[Dict]], schema: Dict[str, List[Dict]]) -> n
                     for k, v in edge_data.items()
                     if k not in [columns[0], columns[1]]
                 }
-                edge_props["type"] = edge_type  # Add edge type property
+                edge_props["type"] = edge["type"]  # Add edge type property
                 G.add_edge(source_id, target_id, **edge_props)
 
     return G
